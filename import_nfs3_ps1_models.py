@@ -76,6 +76,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 			vertices = []
 			normals = []
 			faces = []
+			mesh_unk0 = []
 			
 			geoPartName = get_geoPartNames(index)
 			num_vrtx = struct.unpack('<I', f.read(0x4))[0]
@@ -99,7 +100,8 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 				padding = f.read(0x6)
 			
 			for i in range (num_unk0):
-				mesh_unk0 = struct.unpack('<I', f.read(0x4))
+				unk0 = struct.unpack('<I', f.read(0x4))[0]
+				mesh_unk0.append((unk0))
 			if num_unk0 % 2 == 1:	#Data offset, happens when num_unk0 is odd
 				padding = f.read(0x4)
 			
@@ -111,9 +113,8 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 				padding = f.read(0x6)
 			
 			for i in range(num_plgn):
-				mapping = f.read(0x1)
-				mapping = mapping_decode(mapping, "little")
-				unk0 = f.read(0x3)
+				mapping = mapping_decode(f.read(0x1), "little")
+				unk0 = int.from_bytes(f.read(0x3), "little")
 				vertex_indices = struct.unpack('<4H', f.read(0x8))
 				unk1 = f.read(0x8)
 				normal_indices = struct.unpack('<4H', f.read(0x8))
@@ -132,6 +133,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 				bm = bmesh.new()
 				
 				#Creating new properties
+				face_unk0 = (bm.faces.layers.int.get("face_unk0") or bm.faces.layers.int.new("face_unk0"))
 				is_triangle = (bm.faces.layers.int.get("is_triangle") or bm.faces.layers.int.new("is_triangle"))
 				uv_flip = (bm.faces.layers.int.get("uv_flip") or bm.faces.layers.int.new("uv_flip"))
 				flip_normal = (bm.faces.layers.int.get("flip_normal") or bm.faces.layers.int.new("flip_normal"))
@@ -175,6 +177,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 						BMFace = BMFace.copy(verts=False, edges=False)
 					BMFace.index = i
 					BMFace.smooth = True
+					BMFace[face_unk0] = unk0
 					BMFace[is_triangle] = mapping[0][1]
 					BMFace[uv_flip] = mapping[1][1]
 					BMFace[flip_normal] = mapping[2][1]
@@ -237,6 +240,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 				else:
 					me_ob.calc_normals()
 				
+				me_ob["mesh_unk0"] = [int_to_id(i) for i in mesh_unk0]
 				obj["object_index"] = index
 				obj["object_unk0"] = [int_to_id(i) for i in object_unk0]
 				main_collection.objects.link(obj)
