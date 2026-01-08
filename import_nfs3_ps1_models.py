@@ -83,32 +83,35 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 			num_unk0 = struct.unpack('<I', f.read(0x4))[0]
 			num_norm = struct.unpack('<I', f.read(0x4))[0]
 			num_plgn = struct.unpack('<I', f.read(0x4))[0]
+			
+			pos_scale = 65536
 			pos = struct.unpack('<3i', f.read(0xC))
-			pos = [pos[0]/65536, pos[1]/65536, pos[2]/65536]
+			pos = [pos[0]/pos_scale, pos[1]/pos_scale, pos[2]/pos_scale]
 			
 			object_unk0 = struct.unpack('<4I', f.read(0x10))
-
 			object_unk1 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x0
 			object_unk2 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
 			object_unk3 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
 			
-			for i in range (num_vrtx):
+			vert_scale = 256
+			for i in range(num_vrtx):
 				vertex = struct.unpack('<3h', f.read(0x6))
-				vertex = [vertex[0]/256, vertex[1]/256, vertex[2]/256]
-				vertices.append ((vertex[0], vertex[1], vertex[2]))
+				vertex = [vertex[0]/vert_scale, vertex[1]/vert_scale, vertex[2]/vert_scale]
+				vertices.append((vertex[0], vertex[1], vertex[2]))
 			if num_vrtx % 2 == 1:	#Data offset, happens when num_vrtx is odd
 				padding = f.read(0x6)
 			
-			for i in range (num_unk0):
+			for i in range(num_unk0):
 				unk0 = struct.unpack('<I', f.read(0x4))[0]
 				mesh_unk0.append((unk0))
 			if num_unk0 % 2 == 1:	#Data offset, happens when num_unk0 is odd
 				padding = f.read(0x4)
 			
-			for i in range (num_norm):
+			norm_scale = 4096
+			for i in range(num_norm):
 				normal = struct.unpack('<3h', f.read(0x6))
-				normal = [normal[0]/4096, normal[1]/4096, normal[2]/4096]
-				normals.append ((normal[0], normal[1], normal[2]))
+				normal = [normal[0]/norm_scale, normal[1]/norm_scale, normal[2]/norm_scale]
+				normals.append((normal[0], normal[1], normal[2]))
 			if num_norm % 2 == 1:	#Data offset, happens when num_norm is odd
 				padding = f.read(0x6)
 			
@@ -120,7 +123,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 				normal_indices = struct.unpack('<4H', f.read(0x8))
 				texture_name = f.read(0x4)
 				
-				faces.append([mapping, unk0, vertex_indices, normal_indices, unk1, texture_name])
+				faces.append([mapping, unk0, vertex_indices, unk1, normal_indices, texture_name])
 			
 			if num_vrtx > 0:
 				#==================================================================================================
@@ -157,7 +160,7 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 					BMVert_dictionary[i] = BMVert
 				
 				for i, face in enumerate(faces):
-					mapping, unk0, vertex_indices, normal_indices, unk1, texture_name = face
+					mapping, unk0, vertex_indices, unk1, normal_indices, texture_name = face
 					
 					if mapping[0][1] == 1:	#is_triangle
 						face_vertices = [BMVert_dictionary[vertex_indices[0]], BMVert_dictionary[vertex_indices[1]], BMVert_dictionary[vertex_indices[2]]]
@@ -220,7 +223,10 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 							me_ob.create_normals_split()
 						has_some_normal_data = True
 					else:
-						normal_data.extend([0.0, 0.0, 0.0])
+						if mapping[0][1] == 1:	#is_triangle
+							normal_data.extend([0.0, 0.0, 0.0])
+						else:
+							normal_data.extend([0.0, 0.0, 0.0, 0.0])
 					
 					if mapping[2][1] == 1:	#flip_normal
 						BMFace.normal_flip()
