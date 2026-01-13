@@ -34,6 +34,7 @@ from bpy_extras.io_utils import (
 	axis_conversion,
 )
 import bmesh
+import binascii
 import math
 from mathutils import Matrix
 import os
@@ -63,204 +64,169 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 	
 	print("Importing file %s" % os.path.basename(file_path))
 	
-	with open(file_path, "rb") as f:
-		header_unk0 = struct.unpack('<I', f.read(0x4))[0]
-		main_collection["header_unk0"] = header_unk0
+	## PARSING FILES
+	print("Parsing file...")
+	parsing_time = time.time()
+	
+	GeoGeometry = read_GeoGeometry(file_path)
+	header_unk0, header_unk1, header_unk2, GeoMeshes = GeoGeometry
+	
+	elapsed_time = time.time() - parsing_time
+	print("... %.4fs" % elapsed_time)
+	
+	## IMPORTING TO SCENE
+	print("Importing data to scene...")
+	importing_time = time.time()
+	
+	main_collection["header_unk0"] = header_unk0
+	main_collection["header_unk1"] = [int_to_id(i) for i in header_unk1]
+	
+	for index in range(0, len(GeoMeshes)):
+		GeoMesh = GeoMeshes[index]
+		num_vrtx, num_unks, num_norm, num_plgn, pos, object_unk0, object_unk1, object_unk2, object_unk3, object_unk4, object_unk5, object_unk6, vertices, vertices_offset, unks, unks_offset, normals, normals_offset, faces = GeoMesh
 		
-		header_unk1 = struct.unpack('<32I', f.read(0x80))
-		main_collection["header_unk1"] = [int_to_id(i) for i in header_unk1]
-		
-		header_unk2 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x0
-		
-		for index in range(32):
-			vertices = []
-			normals = []
-			faces = []
-			mesh_unk0 = []
-			offset_vrtx = []
-			offset_unk0 = []
-			offset_norm = []
-			
+		if num_vrtx > 0:
 			geoPartName = get_geoPartNames(index)
-			num_vrtx = struct.unpack('<I', f.read(0x4))[0]
-			num_unk0 = struct.unpack('<I', f.read(0x4))[0]
-			num_norm = struct.unpack('<I', f.read(0x4))[0]
-			num_plgn = struct.unpack('<I', f.read(0x4))[0]
 			
-			pos_scale = 65536
-			pos = struct.unpack('<3i', f.read(0xC))
-			pos = [pos[0]/pos_scale, pos[1]/pos_scale, pos[2]/pos_scale]
+			#==================================================================================================
+			#Building Mesh
+			#==================================================================================================
+			me_ob = bpy.data.meshes.new(geoPartName)
+			obj = bpy.data.objects.new(geoPartName, me_ob)
 			
-			object_unk0 = struct.unpack('<4I', f.read(0x10))
-			object_unk1 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x0
-			object_unk2 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
-			object_unk3 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
+			#Get a BMesh representation
+			bm = bmesh.new()
 			
-			vert_scale = 256
-			for i in range(num_vrtx):
-				vertex = struct.unpack('<3h', f.read(0x6))
-				vertex = [vertex[0]/vert_scale, vertex[1]/vert_scale, vertex[2]/vert_scale]
-				vertices.append((vertex[0], vertex[1], vertex[2]))
-			if num_vrtx % 2 == 1:	#Data offset, happens when num_vrtx is odd
-				offset_vrtx = struct.unpack('<3h', f.read(0x6))
+			#Creating new properties
+			face_unk0 = (bm.faces.layers.int.get("face_unk0") or bm.faces.layers.int.new("face_unk0"))
+			face_unk1 = (bm.faces.layers.int.get("face_unk1") or bm.faces.layers.int.new("face_unk1"))
+			face_unk2 = (bm.faces.layers.int.get("face_unk2") or bm.faces.layers.int.new("face_unk2"))
+			is_triangle = (bm.faces.layers.int.get("is_triangle") or bm.faces.layers.int.new("is_triangle"))
+			uv_flip = (bm.faces.layers.int.get("uv_flip") or bm.faces.layers.int.new("uv_flip"))
+			flip_normal = (bm.faces.layers.int.get("flip_normal") or bm.faces.layers.int.new("flip_normal"))
+			alpha_clip = (bm.faces.layers.int.get("alpha_clip") or bm.faces.layers.int.new("alpha_clip"))
+			double_sided = (bm.faces.layers.int.get("double_sided") or bm.faces.layers.int.new("double_sided"))
+			unknown = (bm.faces.layers.int.get("unknown") or bm.faces.layers.int.new("unknown"))
+			brake_light = (bm.faces.layers.int.get("brake_light") or bm.faces.layers.int.new("brake_light"))
+			is_wheel = (bm.faces.layers.int.get("is_wheel") or bm.faces.layers.int.new("is_wheel"))
 			
-			for i in range(num_unk0):
-				unk0 = struct.unpack('<I', f.read(0x4))[0]
-				mesh_unk0.append((unk0))
-			if num_unk0 % 2 == 1:	#Data offset, happens when num_unk0 is odd
-				offset_unk0 = struct.unpack('<I', f.read(0x4))[0]
+			BMVert_dictionary = {}
 			
-			norm_scale = 4096
-			for i in range(num_norm):
-				normal = struct.unpack('<3h', f.read(0x6))
-				normal = [normal[0]/norm_scale, normal[1]/norm_scale, normal[2]/norm_scale]
-				normals.append((normal[0], normal[1], normal[2]))
-			if num_norm % 2 == 1:	#Data offset, happens when num_norm is odd
-				offset_norm = struct.unpack('<3h', f.read(0x6))
+			normal_data = []
+			has_some_normal_data = False
 			
-			for i in range(num_plgn):
-				mapping = mapping_decode(f.read(0x1), "little")
-				unk0 = int.from_bytes(f.read(0x3), "little")
-				vertex_indices = struct.unpack('<4H', f.read(0x8))
-				unk1 = struct.unpack('<Q', f.read(0x8))[0]
-				normal_indices = struct.unpack('<4H', f.read(0x8))
-				texture_name = f.read(0x4)
-				
-				faces.append([mapping, unk0, vertex_indices, unk1, normal_indices, texture_name])
+			uvName = "UVMap" #or UV1Map
+			uv_layer = bm.loops.layers.uv.get(uvName) or bm.loops.layers.uv.new(uvName)
 			
-			if num_vrtx > 0:
-				#==================================================================================================
-				#Building Mesh
-				#==================================================================================================
-				me_ob = bpy.data.meshes.new(geoPartName)
-				obj = bpy.data.objects.new(geoPartName, me_ob)
+			for i, position in enumerate(vertices):
+				BMVert = bm.verts.new(position)
+				BMVert.index = i
+				BMVert_dictionary[i] = BMVert
+			
+			for i, face in enumerate(faces):
+				mapping, unk0, vertex_indices, unk1, unk2, normal_indices, texture_name = face
 				
-				#Get a BMesh representation
-				bm = bmesh.new()
-				
-				#Creating new properties
-				face_unk0 = (bm.faces.layers.int.get("face_unk0") or bm.faces.layers.int.new("face_unk0"))
-				is_triangle = (bm.faces.layers.int.get("is_triangle") or bm.faces.layers.int.new("is_triangle"))
-				uv_flip = (bm.faces.layers.int.get("uv_flip") or bm.faces.layers.int.new("uv_flip"))
-				flip_normal = (bm.faces.layers.int.get("flip_normal") or bm.faces.layers.int.new("flip_normal"))
-				alpha_clip = (bm.faces.layers.int.get("alpha_clip") or bm.faces.layers.int.new("alpha_clip"))
-				double_sided = (bm.faces.layers.int.get("double_sided") or bm.faces.layers.int.new("double_sided"))
-				unknown = (bm.faces.layers.int.get("unknown") or bm.faces.layers.int.new("unknown"))
-				brake_light = (bm.faces.layers.int.get("brake_light") or bm.faces.layers.int.new("brake_light"))
-				is_wheel = (bm.faces.layers.int.get("is_wheel") or bm.faces.layers.int.new("is_wheel"))
-				
-				BMVert_dictionary = {}
-				
-				normal_data = []
-				has_some_normal_data = False
-				
-				uvName = "UVMap" #or UV1Map
-				uv_layer = bm.loops.layers.uv.get(uvName) or bm.loops.layers.uv.new(uvName)
-				
-				for i, position in enumerate(vertices):
-					BMVert = bm.verts.new(position)
-					BMVert.index = i
-					BMVert_dictionary[i] = BMVert
-				
-				for i, face in enumerate(faces):
-					mapping, unk0, vertex_indices, unk1, normal_indices, texture_name = face
-					
-					if mapping[0][1] == 1:	#is_triangle
-						face_vertices = [BMVert_dictionary[vertex_indices[0]], BMVert_dictionary[vertex_indices[1]], BMVert_dictionary[vertex_indices[2]]]
-						face_uvs = [[0, 0], [1, 0], [1, 1]]
-						if mapping[1][1] == 1:	#uv_flip
-							face_uvs = [[0, 1], [1, 1], [1, 0]]
-					else:
-						face_vertices = [BMVert_dictionary[vertex_indices[0]], BMVert_dictionary[vertex_indices[1]], BMVert_dictionary[vertex_indices[2]], BMVert_dictionary[vertex_indices[3]]]
-						face_uvs = [[0, 1], [1, 1], [1, 0], [0, 0]]
-						if mapping[1][1] == 1:	#uv_flip
-							face_uvs = [[0, 0], [1, 0], [1, 1], [0, 1]]
-					try:
-						BMFace = bm.faces.get(face_vertices) or bm.faces.new(face_vertices)
-					except:
-						pass
-					if BMFace.index != -1:
-						BMFace = BMFace.copy(verts=False, edges=False)
-					BMFace.index = i
-					BMFace.smooth = True
-					BMFace[face_unk0] = unk0
-					BMFace[is_triangle] = mapping[0][1]
-					BMFace[uv_flip] = mapping[1][1]
-					BMFace[flip_normal] = mapping[2][1]
-					BMFace[alpha_clip] = mapping[3][1]
-					BMFace[double_sided] = mapping[4][1]
-					BMFace[unknown] = mapping[5][1]
-					BMFace[brake_light] = mapping[6][1]
-					BMFace[is_wheel] = mapping[7][1]
-					
-					material_name = str(texture_name, 'ascii')
-					mat = bpy.data.materials.get(material_name)
-					if mat == None:
-						mat = bpy.data.materials.new(material_name)
-						mat.use_nodes = True
-						mat.name = material_name
-						
-						if mat.node_tree.nodes[0].bl_idname != "ShaderNodeOutputMaterial":
-							mat.node_tree.nodes[0].name = material_name
-					
-					if mat.name not in me_ob.materials:
-						me_ob.materials.append(mat)
-					
-					BMFace.material_index = me_ob.materials.find(mat.name)
-					
-					for loop, uv in zip(BMFace.loops, face_uvs):
-						loop[uv_layer].uv = uv
-					
-					if normals:
-						if mapping[0][1] == 1:	#is_triangle
-							if mapping[2][1] == 1:	#flip_normal
-								normal_data.extend([normals[normal_indices[0]], normals[normal_indices[2]], normals[normal_indices[1]]])
-							else:
-								normal_data.extend([normals[normal_indices[0]], normals[normal_indices[1]], normals[normal_indices[2]]])
-						else:
-							if mapping[2][1] == 1:	#flip_normal
-								normal_data.extend([normals[normal_indices[0]], normals[normal_indices[3]], normals[normal_indices[2]], normals[normal_indices[1]]])
-							else:
-								normal_data.extend([normals[normal_indices[0]], normals[normal_indices[1]], normals[normal_indices[2]], normals[normal_indices[3]]])
-						if has_some_normal_data == False:
-							me_ob.create_normals_split()
-						has_some_normal_data = True
-					else:
-						if mapping[0][1] == 1:	#is_triangle
-							normal_data.extend([0.0, 0.0, 0.0])
-						else:
-							normal_data.extend([0.0, 0.0, 0.0, 0.0])
-					
-					if mapping[2][1] == 1:	#flip_normal
-						BMFace.normal_flip()
-				
-				#Finish up, write the bmesh back to the mesh
-				bm.to_mesh(me_ob)
-				bm.free()
-				
-				if has_some_normal_data:
-					temp = []
-					for data in normal_data:
-						temp.append(data)
-					normal_data = temp[:]
-					
-					me_ob.normals_split_custom_set( normal_data )
-					me_ob.use_auto_smooth = True
+				if mapping[0][1] == 1:	#is_triangle
+					face_vertices = [BMVert_dictionary[vertex_indices[0]], BMVert_dictionary[vertex_indices[1]], BMVert_dictionary[vertex_indices[2]]]
+					face_uvs = [[0, 0], [1, 0], [1, 1]]
+					if mapping[1][1] == 1:	#uv_flip
+						face_uvs = [[0, 1], [1, 1], [1, 0]]
 				else:
-					me_ob.calc_normals()
+					face_vertices = [BMVert_dictionary[vertex_indices[0]], BMVert_dictionary[vertex_indices[1]], BMVert_dictionary[vertex_indices[2]], BMVert_dictionary[vertex_indices[3]]]
+					face_uvs = [[0, 1], [1, 1], [1, 0], [0, 0]]
+					if mapping[1][1] == 1:	#uv_flip
+						face_uvs = [[0, 0], [1, 0], [1, 1], [0, 1]]
+				try:
+					BMFace = bm.faces.get(face_vertices) or bm.faces.new(face_vertices)
+				except:
+					pass
+				if BMFace.index != -1:
+					BMFace = BMFace.copy(verts=False, edges=False)
+				BMFace.index = i
+				BMFace.smooth = True
+				BMFace[face_unk0] = unk0
+				BMFace[face_unk1] = unk1
+				BMFace[face_unk2] = unk2
+				BMFace[is_triangle] = mapping[0][1]
+				BMFace[uv_flip] = mapping[1][1]
+				BMFace[flip_normal] = mapping[2][1]
+				BMFace[alpha_clip] = mapping[3][1]
+				BMFace[double_sided] = mapping[4][1]
+				BMFace[unknown] = mapping[5][1]
+				BMFace[brake_light] = mapping[6][1]
+				BMFace[is_wheel] = mapping[7][1]
 				
-				me_ob["mesh_unk0"] = [int_to_id(i) for i in mesh_unk0]
-				if offset_vrtx:
-					me_ob["offset_vrtx"] = offset_vrtx
-				if offset_unk0:
-					me_ob["offset_unk0"] = offset_unk0
-				if offset_norm:
-					me_ob["offset_norm"] = offset_norm
-				obj["object_index"] = index
-				obj["object_unk0"] = [int_to_id(i) for i in object_unk0]
-				main_collection.objects.link(obj)
-				bpy.context.view_layer.objects.active = obj
-				obj.matrix_world = m @ Matrix.Translation(pos)
+				material_name = str(texture_name, 'ascii')
+				mat = bpy.data.materials.get(material_name)
+				if mat == None:
+					mat = bpy.data.materials.new(material_name)
+					mat.use_nodes = True
+					mat.name = material_name
+					
+					if mat.node_tree.nodes[0].bl_idname != "ShaderNodeOutputMaterial":
+						mat.node_tree.nodes[0].name = material_name
+				
+				if mat.name not in me_ob.materials:
+					me_ob.materials.append(mat)
+				
+				BMFace.material_index = me_ob.materials.find(mat.name)
+				
+				for loop, uv in zip(BMFace.loops, face_uvs):
+					loop[uv_layer].uv = uv
+				
+				if normals:
+					if mapping[0][1] == 1:	#is_triangle
+						if mapping[2][1] == 1:	#flip_normal
+							normal_data.extend([normals[normal_indices[0]], normals[normal_indices[2]], normals[normal_indices[1]]])
+						else:
+							normal_data.extend([normals[normal_indices[0]], normals[normal_indices[1]], normals[normal_indices[2]]])
+					else:
+						if mapping[2][1] == 1:	#flip_normal
+							normal_data.extend([normals[normal_indices[0]], normals[normal_indices[3]], normals[normal_indices[2]], normals[normal_indices[1]]])
+						else:
+							normal_data.extend([normals[normal_indices[0]], normals[normal_indices[1]], normals[normal_indices[2]], normals[normal_indices[3]]])
+					if has_some_normal_data == False:
+						me_ob.create_normals_split()
+					has_some_normal_data = True
+				else:
+					if mapping[0][1] == 1:	#is_triangle
+						normal_data.extend([0.0, 0.0, 0.0])
+					else:
+						normal_data.extend([0.0, 0.0, 0.0, 0.0])
+				
+				if mapping[2][1] == 1:	#flip_normal
+					BMFace.normal_flip()
+			
+			#Finish up, write the bmesh back to the mesh
+			bm.to_mesh(me_ob)
+			bm.free()
+			
+			if has_some_normal_data:
+				temp = []
+				for data in normal_data:
+					temp.append(data)
+				normal_data = temp[:]
+				
+				me_ob.normals_split_custom_set( normal_data )
+				me_ob.use_auto_smooth = True
+			else:
+				me_ob.calc_normals()
+			
+			me_ob["unks"] = [int_to_id(i) for i in unks]
+			if vertices_offset:
+				me_ob["vertices_offset"] = bytes_to_id(vertices_offset)
+			if unks_offset:
+				me_ob["unks_offset"] = bytes_to_id(unks_offset)
+			if normals_offset:
+				me_ob["normals_offset"] = bytes_to_id(normals_offset)
+			obj["object_index"] = index
+			obj["object_unk0"] = int_to_id(object_unk0)
+			obj["object_unk1"] = int_to_id(object_unk1)
+			obj["object_unk2"] = int_to_id(object_unk2)
+			obj["object_unk3"] = int_to_id(object_unk3)
+			main_collection.objects.link(obj)
+			bpy.context.view_layer.objects.active = obj
+			obj.matrix_world = m @ Matrix.Translation(pos)
 	
 	## Adjusting scene
 	for window in bpy.context.window_manager.windows:
@@ -279,6 +245,94 @@ def import_nfs3_ps1_models(context, file_path, clear_scene, m):
 	elapsed_time = time.time() - start_time
 	print("Elapsed time: %.4fs" % elapsed_time)
 	return {'FINISHED'}
+
+
+def read_GeoGeometry(file_path):
+	GeoMeshes = []
+	
+	with open(file_path, "rb") as f:
+		unk0 = struct.unpack('<I', f.read(0x4))[0]
+		unk1 = struct.unpack('<32I', f.read(0x80))
+		unk2 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x0
+		
+		for i in range(32):
+			GeoMesh = read_GeoMesh(f)
+			GeoMeshes.append(GeoMesh)
+	
+	GeoGeometry = [unk0, unk1, unk2, GeoMeshes]
+	
+	return GeoGeometry
+
+
+def read_GeoMesh(f):
+	vertices = []
+	vertices_offset = []
+	unks = []
+	unks_offset = []
+	normals = []
+	normals_offset = []
+	polygons = []
+	
+	num_vrtx = struct.unpack('<I', f.read(0x4))[0]
+	num_unks = struct.unpack('<I', f.read(0x4))[0]
+	num_norm = struct.unpack('<I', f.read(0x4))[0]
+	num_plgn = struct.unpack('<I', f.read(0x4))[0]
+	
+	pos_scale = 65536
+	pos = struct.unpack('<3i', f.read(0xC))
+	pos = [pos[0]/pos_scale, pos[1]/pos_scale, pos[2]/pos_scale]
+	
+	unk0 = struct.unpack('<I', f.read(0x4))[0]
+	unk1 = struct.unpack('<I', f.read(0x4))[0]
+	unk2 = struct.unpack('<I', f.read(0x4))[0]
+	unk3 = struct.unpack('<I', f.read(0x4))[0]
+	unk4 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x0
+	unk5 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
+	unk6 = struct.unpack('<Q', f.read(0x8))[0]	#Always == 0x1
+	
+	vert_scale = 256
+	for i in range(num_vrtx):
+		vertex = struct.unpack('<3h', f.read(0x6))
+		vertex = [vertex[0]/vert_scale, vertex[1]/vert_scale, vertex[2]/vert_scale]
+		vertices.append((vertex[0], vertex[1], vertex[2]))
+	if num_vrtx % 2 == 1:	#Data offset, happens when num_vrtx is odd
+		vertices_offset = f.read(0x6)
+	
+	for i in range(num_unks):
+		unk = struct.unpack('<I', f.read(0x4))[0]
+		unks.append((unk0))
+	if num_unks % 2 == 1:	#Data offset, happens when num_unks is odd
+		unks_offset = f.read(0x4)
+	
+	norm_scale = 4096
+	for i in range(num_norm):
+		normal = struct.unpack('<3h', f.read(0x6))
+		normal = [normal[0]/norm_scale, normal[1]/norm_scale, normal[2]/norm_scale]
+		normals.append((normal[0], normal[1], normal[2]))
+	if num_norm % 2 == 1:	#Data offset, happens when num_norm is odd
+		normals_offset = f.read(0x6)
+	
+	for i in range(num_plgn):
+		GeoPolygon = read_GeoPolygon(f)
+		polygons.append(GeoPolygon)
+	
+	GeoMesh = [num_vrtx, num_unks, num_norm, num_plgn, pos, unk0, unk1, unk2, unk3, unk4, unk5, unk6, vertices, vertices_offset, unks, unks_offset, normals, normals_offset, polygons]
+	
+	return GeoMesh
+
+
+def read_GeoPolygon(f):
+	mapping = mapping_decode(f.read(0x1), "little")
+	unk0 = int.from_bytes(f.read(0x3), "little")
+	vertex_indices = struct.unpack('<4H', f.read(0x8))
+	unk1 = struct.unpack('<I', f.read(0x4))[0]
+	unk2 = struct.unpack('<I', f.read(0x4))[0]
+	normal_indices = struct.unpack('<4H', f.read(0x8))
+	texture_name = f.read(0x4)
+	
+	GeoPolygon = [mapping, unk0, vertex_indices, unk1, unk2, normal_indices, texture_name]
+	
+	return GeoPolygon
 
 
 def get_geoPartNames(index):
@@ -341,6 +395,14 @@ def mapping_decode(mapping, endian):
 	mapping = [(name, value) for name, value in zip(mapping_names, mapping_values)]
 	
 	return(mapping)
+
+
+def bytes_to_id(id):
+	id = binascii.hexlify(id)
+	id = str(id,'ascii')
+	id = id.upper()
+	id = '_'.join([id[x : x+2] for x in range(0, len(id), 2)])
+	return id
 
 
 def int_to_id(id):
@@ -406,7 +468,7 @@ class ImportNFS3PS1(Operator, ImportHelper):
 	filter_glob: StringProperty(
 			options={'HIDDEN'},
 			default="*.geo",
-			maxlen=255,  # Max internal buffer length, longer would be clamped.
+			maxlen=255,	 # Max internal buffer length, longer would be clamped.
 			)
 	
 	files: CollectionProperty(
