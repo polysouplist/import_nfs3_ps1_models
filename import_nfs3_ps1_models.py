@@ -310,9 +310,9 @@ def create_object(index, vertices, vertices_offset, unks, unks_offset, normals, 
 			has_some_normal_data = True
 		else:
 			if mapping[0][1] == 1:	#is_triangle
-				normal_data.extend([0.0, 0.0, 0.0])
+				normal_data.extend([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
 			else:
-				normal_data.extend([0.0, 0.0, 0.0, 0.0])
+				normal_data.extend([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
 		
 		if mapping[2][1] == 1:	#flip_normal
 			BMFace.normal_flip()
