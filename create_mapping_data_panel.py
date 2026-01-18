@@ -1,5 +1,5 @@
 bl_info = {
-	"name": "Mapping Properties Panel",
+	"name": "Mapping Properties Panels",
 	"author": "PolySoupList",
 	"version": (1, 0, 0),
 	"blender": (3, 6, 23),
